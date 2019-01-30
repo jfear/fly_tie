@@ -1,6 +1,7 @@
 import sys
 sys.path.insert(0, srcdir('../lcdb-wf'))
 import os
+from pathlib import Path
 from textwrap import dedent
 import yaml
 import tempfile
@@ -9,185 +10,137 @@ from lcdblib.snakemake import helpers, aligners
 from lcdblib.utils import utils
 from lib import common
 from lib import cluster_specific
-from lib.patterns_targets import RNASeqConfig
 
 
 configfile: 'config/config.yaml'
-
 include: '../references-wf/Snakefile'
 shell.prefix('set -euo pipefail; export TMPDIR={};'.format(cluster_specific.tempdir_for_biowulf()))
 shell.executable('/bin/bash')
 
-config = common.load_config(config)
+# Global variables from config
+REFERENCES_DIR = os.environ['REFERENCES_DIR']
+ORGANISM = config['organism']
+ALIGNER = config['aligner']['index']
+TAG = config['aligner']['tag']
 
-c = RNASeqConfig(config, config.get('patterns', 'config/rnaseq_patterns.yaml'))
+# load filename patterns
+with open(config['patterns']) as fh:
+    patterns = yaml.load(fh.read())
 
-wildcard_constraints:
-    n = '[1,2]'
-
-
-def wrapper_for(path):
-    return 'file:' + os.path.join('../lcdb-wf','wrappers', 'wrappers', path)
+# read sampletable
+sampletable = pd.read_csv(config['sampletable'], sep='\t', index_col=0)
+srxs = sampletable.index.unique().tolist()
 
 # ----------------------------------------------------------------------------
 # RULES
 # ----------------------------------------------------------------------------
+wildcard_constraints:
+    n="[1,2]"
+
+localrules: targets, bamList
+
 # TODO add code to make stringtie params.
 
-final_targets = utils.flatten((
-    c.targets['bam'],
-))
+targets = (
+    expand(patterns['bam'], sample=srxs)
+)
 
-# Special case: all samples are single-end
-if all(c.sampletable.iloc[:, 0].apply(
-    lambda x: not common.is_paired_end(c.sampletable, x))
-):
-    ALL_SE = True
-    final_targets = [i.replace('{n}', '1') for i in final_targets]
-else:
-    ALL_SE = False
 
 rule targets:
-    """
-    Final targets to create
-    """
-    input: final_targets
+    input: patterns['stringtie']
 
-def render_r1_r2(pattern):
-    if ALL_SE:
-        return expand(pattern, sample='{sample}', n=[1])
-    return expand(pattern, sample='{sample}', n=[1, 2])
-
-# Convert the sampletable to be indexed by the first column, for
-# convenience in generating the input/output filenames.
-_st = c.sampletable.set_index(c.sampletable.columns[0])
 
 rule fastq_dump:
-    output:
-        fastq=render_r1_r2(c.patterns['fastq'])
-    run:
-        srr = _st.loc[wildcards.sample, 'Run']
+    output: temp(patterns['fastq'])
+    params:
+        sampletable = sampletable
+    resources:
+        mem_gb = lambda wildcards, attempt: attempt * 2,
+        time_hr = lambda wildcards, attempt: attempt * 4
+    script: 'scripts/fastq_dump.py'
 
-        # Two different paths depending on the layout. In both cases, we
-        # want to avoid creating the final output until the very end, to
-        # avoid incomplete downloads.
-        if common.is_paired_end(c.sampletable, wildcards.sample):
 
-            # For PE we need to use --split-files, which also means using
-            # the slower --gzip
-            shell(
-                'fastq-dump '
-                '{srr} '
-                '--gzip '
-                '--split-files '
-                # '-X 100000 ' # [TEST SETTINGS]
-            )
-
-            # The filenames are predictable, so we can move them as needd.
-            shell('mv {srr}_1.fastq.gz {output[0]}')
-            shell('mv {srr}_2.fastq.gz {output[1]}')
-
-        else:
-            # For SE, we can use the faster stdout | gzip, and move it
-            # directly when done.
-            shell(
-                'fastq-dump '
-                '{srr} '
-                '-Z '
-                # '-X 100000 ' # [TEST SETTINGS]
-                '| gzip -c > {output[0]}.tmp '
-                '&& mv {output[0]}.tmp {output[0]} '
-            )
-            if not ALL_SE:
-                shell('touch {output[1]}')
+def _cutadapt(wildcards):
+    fastq_pth = Path(patterns['fastq'].format(sample=wildcards.sample, n=1))
+    return [str(fname) for fname in fastq_pth.parent.glob('*_R[1,2].fastq.gz')]
 
 
 rule cutadapt:
-    """
-    Run cutadapt
-    """
-    input:
-        fastq=common.fill_r1_r2(c.sampletable, c.patterns['fastq'])
-    output:
-        fastq=render_r1_r2(c.patterns['cutadapt'])
-    log:
-        render_r1_r2(c.patterns['cutadapt'])[0] + '.log'
-    run:
-        paired = len(input) == 2
+    input: _cutadapt
+    output: patterns['cutadapt']
+    params:
+        extra = '-a file:../lcdb-wf/include/adapters.fa -q 20 --minimum-length=25'
+    log: patterns['cutadapt'] + '.log'
+    resources:
+        mem_gb = lambda wildcards, attempt: attempt * 8,
+        time_hr = lambda wildcards, attempt: attempt * 4
+    script: 'scripts/cutadapt.py'
 
-        # NOTE: Change cutadapt params here
-        extra='-a file:../lcdb-wf/include/adapters.fa -q 20 --minimum-length=25'
 
-        if paired:
-            shell(
-                "cutadapt "
-                "{extra} "
-                "{input.fastq[0]} "
-                "{input.fastq[1]} "
-                "-o {output[0]} "
-                "-p {output[1]} "
-                "&> {log}"
-            )
-        else:
-            shell(
-                "cutadapt "
-                "{extra} "
-                "{input.fastq[0]} "
-                "-o {output[0]} "
-                "&> {log}"
-            )
-            if not ALL_SE:
-                shell('touch {output[1]}')
+def _hisat2(wildcards):
+    fastq_pth = Path(patterns['fastq'].format(sample=wildcards.sample, n=1))
+    return sorted([str(fname) for fname in fastq_pth.parent.glob('*_R[1,2].cutadapt.fastq.gz')])
 
 
 rule hisat2:
-    """
-    Map reads with HISAT2
-    """
     input:
-        fastq=common.fill_r1_r2(c.sampletable, c.patterns['cutadapt']),
-        index=[c.refdict[c.organism][config['aligner']['tag']]['hisat2']]
+        fastq =_hisat2,
+        index = f'{REFERENCES_DIR}/{ORGANISM}/{TAG}/{ALIGNER}/{ORGANISM}_{TAG}.1.ht2'
     output:
-        bam=c.patterns['bam']
-    log:
-        c.patterns['bam'] + '.log'
+        bam=patterns['bam']
+    log: patterns['bam'] + '.log'
     params:
-        # NOTE: see examples at
-        # https://github.com/lcdb/lcdb-wf/tree/master/wrappers/wrappers/hisat2/align
-        # for details on setting hisat2 params and samtools params separately.
         samtools_view_extra='-F 0x04'
     threads: 6
-    script:
-        wrapper_for('hisat2/align/wrapper.py')
-
-
-rule bam_count:
-    """
-    Count reads in a BAM file
-    """
-    input:
-        bam='{sample_dir}/{sample}/{suffix}.bam'
-    output:
-        count='{sample_dir}/{sample}/{suffix}.bam.libsize'
-    shell:
-        'samtools view -c {input} > {output}'
+    resources:
+        mem_gb = lambda wildcards, attempt: attempt * 8,
+        time_hr = lambda wildcards, attempt: attempt * 4
+    script: '../lcdb-wf/wrappers/wrappers/hisat2/align/wrapper.py'
 
 
 rule bam_index:
-    """
-    Index a BAM
-    """
+    input: '{prefix}.bam'
+    output: '{prefix}.bam.bai'
+    shell: 'samtools index {input} {output}'
+
+
+def _bamList(wildcards):
+    fnames = []
+    for srx in srxs:
+        fnames.append(patterns['bam'].format(sample=srx))
+    return fnames
+
+
+rule bamList:
+    input: _bamList
+    output: patterns['bamList']
+    run:
+        with open(output[0], 'w') as fh:
+            fh.write('\n'.join(input))
+
+
+rule mergeBam:
+    input: rules.bamList.output[0]
+    output: patterns['merged_bam']
+    threads: 12
+    resources:
+        mem_gb = lambda wildcards, attempt: attempt * 30,
+        time_hr = lambda wildcards, attempt: attempt * 24
+    shell: "samtools merge -b {input} -@ {threads} {output[0]}"
+
+
+rule stringtie:
     input:
-        bam='{prefix}.bam'
-    output:
-        bai='{prefix}.bam.bai'
-    shell:
-        'samtools index {input} {output}'
+        bam = rules.mergeBam.output[0],
+        gtf = f'{REFERENCES_DIR}/{ORGANISM}/{TAG}/gtf/{ORGANISM}_{TAG}.gtf'
+    output: patterns['stringtie']
+    threads: 12
+    resources:
+        mem_gb = lambda wildcards, attempt: attempt * 62,
+        time_hr = lambda wildcards, attempt: attempt * 24
+    shell: "stringtie {input.bam} -G {input.gtf} -p {threads} -o {output[0]}"
 
 
-#TODO add StringTie
-
-# TODO add GFFcompare or someother metric
-
+# TODO add GFF compare or some other metric
 
 # vim: ft=python

@@ -1,0 +1,7 @@
+fastq: '../output/{sample}/{sample}_R{n}.fastq.gz'
+cutadapt: '../output/{sample}/{sample}_R{n}.cutadapt.fastq.gz'
+bam: '../output/{sample}/{sample}.cutadapt.bam'
+merged_bam: '../output/heads.bam'
+bamList: '../output/bamlist.txt'
+# TODO fix stringtie sample names to add params
+stringtie: '../output/stringtie/head.gtf'
