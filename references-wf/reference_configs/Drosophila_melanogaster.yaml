@@ -48,15 +48,3 @@ references:
         postprocess: 'lib.common.cat'
         indexes:
           - 'salmon'
-      fasta:
-        url:
-          - 'ftp://ftp.flybase.net/genomes/Drosophila_melanogaster/dmel_r6.11_FB2016_03/fasta/dmel-all-chromosome-r6.11.fasta.gz'
-          -  'https://www-s.nist.gov/srmors/certificates/documents/SRM2374_Sequence_v1.FASTA'
-        postprocess:
-          function: "lib.postprocess.merge.file_merge"
-          args:
-            - "lib.postprocess.dm6.fasta_postprocess"
-            - "lib.postprocess.ercc.fasta_postprocess"
-        indexes:
-          - 'bowtie2'
-          - 'hisat2'
