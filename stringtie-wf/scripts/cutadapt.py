@@ -1,22 +1,27 @@
+import pandas as pd
 from snakemake import shell
 
-fastqs = snakemake.input
-output = snakemake.output
+fastq1 = snakemake.input.r1
+fastq2 = snakemake.input.r2
+
+oname1 = snakemake.output.r1
+oname2 = snakemake.output.r2
+
+sampletable = pd.read_csv(snakemake.config['sampletable'], sep='\t', index_col=0)
+
 extra = snakemake.params.extra
 log = snakemake.log
 
 
 def main():
-    paried = len(fastqs) == 2
-    oname1 = output[0]
-    oname2 = oname1.replace('R1', 'R2')
+    layout = get_layout()
 
-    if paried:
+    if layout == 'PE':
         shell(
             "cutadapt "
             "{extra} "
-            "{fastqs[0]} "
-            "{fastqs[1]} "
+            "{fastq1} "
+            "{fastq2} "
             "-o {oname1} "
             "-p {oname2} "
             "&> {log}"
@@ -25,10 +30,19 @@ def main():
         shell(
             "cutadapt "
             "{extra} "
-            "{fastqs[0]} "
+            "{fastq1} "
             "-o {oname1} "
-            "&> {log}"
+            "&> {log} "
+            "&& touch {oname2}"
         )
+
+
+def get_layout():
+    srx = snakemake.wildcards.sample
+    layout = sampletable.loc[srx, 'layout']
+    if isinstance(layout, str):
+        return layout
+    return layout.tolist()[0]
 
 
 if __name__ == '__main__':

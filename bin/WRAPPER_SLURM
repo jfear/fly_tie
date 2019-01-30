@@ -1,7 +1,7 @@
 #!/bin/bash
-#SBATCH --job-name="seq_sra"
+#SBATCH --job-name="fly_tie"
 #SBATCH --partition="norm"
-#SBATCH --time=144:00:00
+#SBATCH --time=100:00:00
 #SBATCH --cpus-per-task=2
 
 # Make required folders

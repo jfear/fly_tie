@@ -51,40 +51,51 @@ rule targets:
 
 
 rule fastq_dump:
-    output: temp(patterns['fastq'])
-    params:
-        sampletable = sampletable
+    output:
+        r1 = temp(patterns['fastq_R1']),
+        r2 = temp(patterns['fastq_R2']),
     resources:
         mem_gb = lambda wildcards, attempt: attempt * 2,
         time_hr = lambda wildcards, attempt: attempt * 4
     script: 'scripts/fastq_dump.py'
 
 
-def _cutadapt(wildcards):
-    fastq_pth = Path(patterns['fastq'].format(sample=wildcards.sample, n=1))
-    return [str(fname) for fname in fastq_pth.parent.glob('*_R[1,2].fastq.gz')]
-
-
 rule cutadapt:
-    input: _cutadapt
-    output: patterns['cutadapt']
+    input:
+        r1 = rules.fastq_dump.output.r1,
+        r2 = rules.fastq_dump.output.r2
+    output:
+        r1 = patterns['cutadapt_R1'],
+        r2 = patterns['cutadapt_R2']
     params:
-        extra = '-a file:../lcdb-wf/include/adapters.fa -q 20 --minimum-length=25'
-    log: patterns['cutadapt'] + '.log'
+        extra = '-a file:../lcdb-wf/include/adapters.fa -q 20 --minimum-length=25',
+    log: patterns['cutadapt_R1'] + '.log'
     resources:
         mem_gb = lambda wildcards, attempt: attempt * 8,
         time_hr = lambda wildcards, attempt: attempt * 4
     script: 'scripts/cutadapt.py'
 
 
+def _get_layout(srx):
+    layout = sampletable.loc[srx, 'layout']
+    if isinstance(layout, str):
+        return layout
+    return layout.tolist()[0]
+
+
 def _hisat2(wildcards):
-    fastq_pth = Path(patterns['fastq'].format(sample=wildcards.sample, n=1))
-    return sorted([str(fname) for fname in fastq_pth.parent.glob('*_R[1,2].cutadapt.fastq.gz')])
+    srx = wildcards.sample
+    layout = _get_layout(srx)
+
+    if layout == 'PE':
+        return patterns['cutadapt_R1'].format(sample=srx), patterns['cutadapt_R2'].format(sample=srx)
+
+    return patterns['cutadapt_R1'].format(sample=srx)
 
 
 rule hisat2:
     input:
-        fastq =_hisat2,
+        fastq = _hisat2,
         index = f'{REFERENCES_DIR}/{ORGANISM}/{TAG}/{ALIGNER}/{ORGANISM}_{TAG}.1.ht2'
     output:
         bam=patterns['bam']
