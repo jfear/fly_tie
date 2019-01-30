@@ -1,0 +1,11 @@
+sampletable: 'config/sampletable.tsv'
+patterns: 'config/rnaseq_patterns.yaml'
+organism: 'dmel'
+references_dir: 'references_data'
+aligner:
+  index: 'hisat2'
+  tag: 'r6-11'
+gtf:
+  tag: "r6-11"
+include_references:
+  - '../references-wf/reference_configs/Drosophila_melanogaster.yaml'
