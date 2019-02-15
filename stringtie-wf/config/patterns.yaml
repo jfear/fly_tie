@@ -7,3 +7,9 @@ merged_bam: '../output/heads.bam'
 bamList: '../output/bamlist.txt'
 # TODO fix stringtie sample names to add params
 stringtie: '../output/stringtie/head.gtf'
+stringtie_single: '../output/stringtie/single_setting_{setting}.gtf'
+gffcompare_single:
+  stats: '../output/stringtie/gffcmp_{setting}.stats'
+  loci: '../output/stringtie/gffcmp_{setting}.loci'
+  gtf: '../output/stringtie/gffcmp_{setting}.annotated.gtf'
+  tracking: '../output/stringtie/gffcmp_{setting}.tracking'

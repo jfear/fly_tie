@@ -61,6 +61,7 @@ dependencies:
   - fastqc=0.11.8
   - gat=1.3.5
   - gffutils=0.9
+  - gffcompare=0.10.6
   - hisat2=2.1.0
   - htslib=1.9
   - intervalstats=1.01

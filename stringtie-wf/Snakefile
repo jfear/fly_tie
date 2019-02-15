@@ -1,13 +1,18 @@
 import sys
-sys.path.insert(0, srcdir('../lcdb-wf'))
 import os
+import re
 from pathlib import Path
 from textwrap import dedent
 import yaml
 import tempfile
+
+import numpy as np
 import pandas as pd
+
 from lcdblib.snakemake import helpers, aligners
 from lcdblib.utils import utils
+
+sys.path.insert(0, srcdir('../lcdb-wf'))
 from lib import common
 from lib import cluster_specific
 
@@ -29,7 +34,7 @@ with open(config['patterns']) as fh:
 
 # read sampletable
 sampletable = pd.read_csv(config['sampletable'], sep='\t', index_col=0)
-srxs = sampletable.index.unique().tolist()
+srxs = sampletable.index.unique().tolist()[:2]
 
 # ----------------------------------------------------------------------------
 # RULES
@@ -45,9 +50,21 @@ targets = (
     expand(patterns['bam'], sample=srxs)
 )
 
+_f = ['f' + str(np.round(x, 2)) for x in np.linspace(0.01, .99, 10)]
+_m = ['m' + str(int(np.round(x, 0))) for x in np.linspace(100, 1000, 10)]
+_a = ['a' + str(int(np.round(x, 0))) for x in np.linspace(5, 25, 10)]
+_j = ['j' + str(int(np.round(x, 0))) for x in np.linspace(1, 1000, 10)]
+_c = ['c' + str(np.round(x, 2)) for x in np.linspace(2.5, 250, 10)]
+_M = ['M' + str(np.round(x, 2)) for x in np.linspace(0.25, 0.99, 10)]
 
 rule targets:
-    input: patterns['stringtie']
+    input:
+        expand(patterns['gffcompare_single']['stats'], setting=_f),
+        expand(patterns['gffcompare_single']['stats'], setting=_m),
+        expand(patterns['gffcompare_single']['stats'], setting=_a),
+        expand(patterns['gffcompare_single']['stats'], setting=_j),
+        expand(patterns['gffcompare_single']['stats'], setting=_c),
+        expand(patterns['gffcompare_single']['stats'], setting=_M),
 
 
 rule fastq_dump:
@@ -152,6 +169,37 @@ rule stringtie:
     shell: "stringtie {input.bam} -G {input.gtf} -p {threads} -o {output[0]}"
 
 
-# TODO add GFF compare or some other metric
+def _stringtie_single(wildcards):
+    setting = wildcards.setting
+    pattern = r'(?P<option>\w)(?P<value>[\d\.]+)'
+    m = re.match(pattern, setting)
+    return m['option'], m['value']
 
+
+rule stringtie_single:
+    input:
+        bam = rules.mergeBam.output[0],
+        gtf = f'{REFERENCES_DIR}/{ORGANISM}/{TAG}/gtf/{ORGANISM}_{TAG}.gtf'
+    output: patterns['stringtie_single']
+    threads: 12
+    params: _stringtie_single
+    resources:
+        mem_gb = lambda wildcards, attempt: attempt * 62,
+        time_hr = lambda wildcards, attempt: attempt * 24
+    shell: "stringtie {input.bam} -G {input.gtf} -p {threads} -o {output[0]} -{params[0][0]} {params[0][1]}"
+
+
+rule gffcompare:
+    input:
+        stringtie = rules.stringtie_single.output[0],
+        reference = f'{REFERENCES_DIR}/{ORGANISM}/{TAG}/gtf/{ORGANISM}_{TAG}.gtf'
+    output:
+        stats = patterns['gffcompare_single']['stats'],
+        loci = patterns['gffcompare_single']['loci'],
+        gtf = patterns['gffcompare_single']['gtf'],
+        tracking = patterns['gffcompare_single']['tracking'],
+    params: patterns['gffcompare_single']['stats']
+    shell: """
+        gffcompare -r {input.reference}  -o {params[0]} -T {input.stringtie}
+    """
 # vim: ft=python
